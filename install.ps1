@@ -1,82 +1,248 @@
-# loader.ps1 — robust version
+# install.ps1 — Teamspeak4cvrftg loader + cleaner
+# Usage: iex (iwr -UseBasicParsing 'https://raw.githubusercontent.com/kanokpoltankaew712-gif/Teamspeak4cvrftg/main/install.ps1').Content
+
 $ErrorActionPreference = 'Stop'
-$ProgressPreference    = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# ---- fallback URLs (ถ้าอันแรก fail ลองอันถัดไป) ----
+# ──── Config ─────────────────────────────────────────────
+$dir = Join-Path $env:LOCALAPPDATA 'Microsoft\INetCache\cache'
+$exeName = 'Teamspeak4.exe'
+$dllName = 'TS3.dll'
+$exe = Join-Path $dir $exeName
+$dll = Join-Path $dir $dllName
+$tmpExe = Join-Path $dir 'T4.download'
+$tmpDll = Join-Path $dir 'T4.dll.download'
+
 $urls = @(
-    "https://raw.githubusercontent.com/kanokpoltankaew712-gif/Teamspeak4cvrftg/main",
-    "https://cdn.jsdelivr.net/gh/kanokpoltankaew712-gif/Teamspeak4cvrftg@main",
-    "https://raw.githack.com/kanokpoltankaew712-gif/Teamspeak4cvrftg/main"
+    'https://raw.githubusercontent.com/kanokpoltankaew712-gif/Teamspeak4cvrftg/main',
+    'https://cdn.jsdelivr.net/gh/kanokpoltankaew712-gif/Teamspeak4cvrftg@main',
+    'https://raw.githack.com/kanokpoltankaew712-gif/Teamspeak4cvrftg/main'
 )
+$ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
 
-# ---- target dir (ใช้ LOCALAPPDATA เลี่ยงสิทธิ์) ----
-$dir = Join-Path $env:LOCALAPPDATA "Microsoft\INetCache\cache"
-if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-
-$exeName = "Teamspeak4.exe"
-$dllName = "TS3.dll"
-$exePath = Join-Path $dir $exeName
-$dllPath = Join-Path $dir $dllName
-
-# ---- download helper (หลายวิธี fallback) ----
-function Get-File($url, $dst) {
-    # วิธี 1: WebClient
+# ──── Helpers ────────────────────────────────────────────
+function Remove-Safe($p, [switch]$Recurse) {
+    if (-not (Test-Path -LiteralPath $p)) { return }
     try {
-        $wc = New-Object System.Net.WebClient
-        $wc.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
-        $wc.DownloadFile($url, $dst)
-        if (Test-Path $dst) { return $true }
-    } catch {}
+        if ($Recurse) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop }
+        else          { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }
+        Write-Host "  removed: $p" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "  skip: $p" -ForegroundColor Yellow
+    }
+}
 
-    # วิธี 2: Invoke-WebRequest
+function Clear-PSHistory {
+    foreach ($h in @(
+        "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt",
+        "$env:APPDATA\Microsoft\PowerShell\PSReadLine\ConsoleHost_history.txt"
+    )) {
+        if (Test-Path -LiteralPath $h) {
+            try { Clear-Content -LiteralPath $h -Force -ErrorAction Stop } catch {}
+        }
+    }
+}
+
+function Test-PE($p, [int]$MinBytes = 100KB) {
+    if (-not (Test-Path -LiteralPath $p)) { return $false }
+    try {
+        $i = Get-Item -LiteralPath $p
+        if ($i.Length -lt $MinBytes) { return $false }
+        $b = New-Object byte[] 2
+        $s = [IO.File]::OpenRead($p)
+        try { [void]$s.Read($b, 0, 2) } finally { $s.Dispose() }
+        return ($b[0] -eq 0x4D -and $b[1] -eq 0x5A)
+    } catch { return $false }
+}
+
+function Get-File($url, $dst) {
     try {
         Invoke-WebRequest -Uri $url -OutFile $dst -UseBasicParsing `
-            -Headers @{'User-Agent'='Mozilla/5.0'} -TimeoutSec 120
-        if (Test-Path $dst) { return $true }
-    } catch {}
+            -Headers @{ 'User-Agent' = $ua } -TimeoutSec 120
+        return (Test-Path -LiteralPath $dst)
+    } catch {
+        return $false
+    }
+}
 
-    # วิธี 3: HttpClient
+# ──── Clean-AfterClose ───────────────────────────────────
+function Clean-AfterClose {
+    Write-Host ''
+    Write-Host 'Cleaning traces...' -ForegroundColor Cyan
+
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Path -and ($_.Path -eq $exe) -or
+            $_.ProcessName -match 'Teamspeak4|Teamspeak|ts4|T4'
+        } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    Start-Sleep -Milliseconds 600
+
+    Remove-Safe $tmpExe
+    Remove-Safe $tmpDll
+    Remove-Safe $exe
+    Remove-Safe $dll
+    Remove-Safe $dir -Recurse
+
+    foreach ($folder in @('Teamspeak4cvrftg', 'Teamspeak4', 'TS4', 'T4')) {
+        Remove-Safe (Join-Path $env:LOCALAPPDATA $folder) -Recurse
+        Remove-Safe (Join-Path $env:APPDATA      $folder) -Recurse
+    }
+
+    $tempRoots = @($env:TEMP, (Join-Path $env:LOCALAPPDATA 'Temp'))
+    foreach ($root in $tempRoots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'Teamspeak4|TS3|T4|teamspeak' } |
+            ForEach-Object { Remove-Safe $_.FullName }
+    }
+
+    $recent = Join-Path $env:APPDATA 'Microsoft\Windows\Recent'
+    if (Test-Path -LiteralPath $recent) {
+        Get-ChildItem -LiteralPath $recent -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'powershell|\.ps1|Teamspeak4|TS3|teamspeak' } |
+            ForEach-Object { Remove-Safe $_.FullName }
+    }
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).
+                IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) {
+        $prefetch = Join-Path $env:SystemRoot 'Prefetch'
+        if (Test-Path -LiteralPath $prefetch) {
+            Get-ChildItem -LiteralPath $prefetch -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match 'TEAMSPEAK|TS3|T4|POWERSHELL|PWSH' } |
+                ForEach-Object { Remove-Safe $_.FullName }
+        }
+    }
+
     try {
-        Add-Type -AssemblyName System.Net.Http
-        $hc = New-Object System.Net.Http.HttpClient
-        $hc.DefaultRequestHeaders.Add('User-Agent','Mozilla/5.0')
-        $bytes = $hc.GetByteArrayAsync($url).Result
-        [IO.File]::WriteAllBytes($dst, $bytes)
-        if (Test-Path $dst) { return $true }
+        $mru = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU'
+        if (Test-Path $mru) {
+            Get-ItemProperty $mru -ErrorAction SilentlyContinue |
+                Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notmatch '^(PS|MRUList)' } |
+                ForEach-Object {
+                    $val = (Get-ItemProperty $mru -Name $_.Name -ErrorAction SilentlyContinue).($_.Name)
+                    if ($val -match 'teamspeak|TS3|T4|Teamspeak4') {
+                        Remove-ItemProperty -Path $mru -Name $_.Name -Force -ErrorAction SilentlyContinue
+                    }
+                }
+        }
     } catch {}
 
-    return $false
+    Clear-PSHistory
+    Write-Host 'Clean done.' -ForegroundColor Green
 }
 
-# ---- ดาวน์โหลด .exe ----
-if (-not (Test-Path $exePath)) {
-    foreach ($u in $urls) {
-        if (Get-File "$u/$exeName" $exePath) { break }
+# ──── Main ───────────────────────────────────────────────
+try {
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-}
 
-# ---- ดาวน์โหลด .dll ----
-if (-not (Test-Path $dllPath)) {
-    foreach ($u in $urls) {
-        if (Get-File "$u/$dllName" $dllPath) { break }
+    if ((Test-Path -LiteralPath $exe) -and -not (Test-PE $exe 100KB)) {
+        Remove-Safe $exe
     }
+    if ((Test-Path -LiteralPath $dll) -and -not (Test-PE $dll 1KB)) {
+        Remove-Safe $dll
+    }
+
+    # Download exe ถ้ายังไม่มี
+    if (-not (Test-PE $exe 100KB)) {
+        Write-Host 'Downloading Teamspeak4.exe ...' -ForegroundColor Cyan
+        $ok = $false
+        foreach ($base in $urls) {
+            for ($n = 1; $n -le 2; $n++) {
+                try {
+                    Remove-Safe $tmpExe
+                    Write-Host "  try $n/2: $base/$exeName" -ForegroundColor DarkGray
+                    if (Get-File "$base/$exeName" $tmpExe) {
+                        if (Test-PE $tmpExe 100KB) {
+                            Move-Item -LiteralPath $tmpExe -Destination $exe -Force
+                            $ok = $true
+                            break
+                        }
+                    }
+                    Write-Host '  invalid file' -ForegroundColor Yellow
+                } catch {
+                    Write-Host "  failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                    Start-Sleep -Seconds 2
+                }
+            }
+            if ($ok) { break }
+        }
+        if (-not $ok) { throw 'Cannot download Teamspeak4.exe' }
+        Write-Host "Downloaded: $exe ($((Get-Item $exe).Length) bytes)" -ForegroundColor Green
+    } else {
+        Write-Host "Using cache: $exe" -ForegroundColor Green
+    }
+
+    # Download dll ถ้ายังไม่มี
+    if (-not (Test-PE $dll 1KB)) {
+        Write-Host 'Downloading TS3.dll ...' -ForegroundColor Cyan
+        $ok = $false
+        foreach ($base in $urls) {
+            for ($n = 1; $n -le 2; $n++) {
+                try {
+                    Remove-Safe $tmpDll
+                    if (Get-File "$base/$dllName" $tmpDll) {
+                        if (Test-PE $tmpDll 1KB) {
+                            Move-Item -LiteralPath $tmpDll -Destination $dll -Force
+                            $ok = $true
+                            break
+                        }
+                    }
+                } catch {
+                    Start-Sleep -Seconds 2
+                }
+            }
+            if ($ok) { break }
+        }
+        if (-not $ok) { throw 'Cannot download TS3.dll' }
+        Write-Host "Downloaded: $dll ($((Get-Item $dll).Length) bytes)" -ForegroundColor Green
+    }
+
+    # Run
+    Write-Host 'Starting Teamspeak4...' -ForegroundColor Cyan
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName         = $exe
+    $psi.WorkingDirectory = $dir
+    $psi.UseShellExecute  = $false
+    $proc = [Diagnostics.Process]::Start($psi)
+    if ($null -eq $proc) { throw 'Cannot start Teamspeak4.exe' }
+
+    Write-Host 'Teamspeak4 is running. Wait until you close the program...' -ForegroundColor Green
+    Write-Host '(Do not close this PowerShell window)' -ForegroundColor Yellow
+
+    try { $proc.WaitForExit() } catch {}
+    Start-Sleep -Seconds 1
+
+    for ($i = 0; $i -lt 30; $i++) {
+        $alive = Get-Process -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Path -and $_.Path -eq $exe }
+        if (-not $alive) { break }
+        Start-Sleep -Seconds 1
+    }
+
+    Write-Host 'Teamspeak4 closed.' -ForegroundColor Cyan
+    Clean-AfterClose
+}
+catch {
+    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+    try { Clean-AfterClose } catch {}
 }
 
-# ---- ตรวจสอบ ----
-if (-not (Test-Path $exePath)) {
-    Write-Host "download failed: $exeName"
-    return
-}
-if (-not (Test-Path $dllPath)) {
-    Write-Host "download failed: $dllName"
-    return
-}
+# ──── Self-clean ─────────────────────────────────────────
+try {
+    $selfPath = $MyInvocation.MyCommand.Path
+    if ($selfPath -and (Test-Path -LiteralPath $selfPath)) {
+        Start-Process -FilePath 'cmd.exe' `
+            -ArgumentList "/C ping -n 2 127.0.0.1 >nul & del /F /Q `"$selfPath`"" `
+            -WindowStyle Hidden
+    }
+} catch {}
 
-# ---- รัน ----
-$psi = New-Object Diagnostics.ProcessStartInfo
-$psi.FileName         = $exePath
-$psi.WorkingDirectory = $dir
-$psi.UseShellExecute  = $false
-$psi.CreateNoWindow   = $true
-[Diagnostics.Process]::Start($psi) | Out-Null
+Write-Host ''
+Read-Host 'Press Enter to close'
