@@ -65,32 +65,54 @@ function Get-File($url, $dst) {
     }
 }
 
-# ──── Clean-AfterClose ───────────────────────────────────
+# ──── Clean-AfterClose (Enhanced) ────────────────────────
 function Clean-AfterClose {
     Write-Host ''
     Write-Host 'Cleaning traces...' -ForegroundColor Cyan
 
+    # 1) Kill process ที่เกี่ยวข้องทั้งหมด
     Get-Process -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Path -and ($_.Path -eq $exe) -or
+            ($_.Path -and $_.Path -eq $exe) -or
             $_.ProcessName -match 'Teamspeak4|Teamspeak|ts4|T4'
         } |
         ForEach-Object {
-            try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {}
+            try {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                Write-Host "  killed PID $($_.Id) ($($_.ProcessName))" -ForegroundColor DarkGray
+            } catch {}
         }
-    Start-Sleep -Milliseconds 600
+    Start-Sleep -Milliseconds 800
 
+    # 2) ลบไฟล์หลักและ temp
     Remove-Safe $tmpExe
     Remove-Safe $tmpDll
     Remove-Safe $exe
     Remove-Safe $dll
-    Remove-Safe $dir -Recurse
 
-    foreach ($folder in @('Teamspeak4cvrftg', 'Teamspeak4', 'TS4', 'T4')) {
+    # 3) ลบโฟลเดอร์ cache ที่ใช้เก็บไฟล์ (Retry 3 ครั้ง)
+    for ($i = 0; $i -lt 3; $i++) {
+        if (-not (Test-Path -LiteralPath $dir)) { break }
+        Remove-Safe $dir -Recurse
+        Start-Sleep -Milliseconds 500
+    }
+    # ถ้ายังไม่หาย ใช้ cmd ลบแบบ force
+    if (Test-Path -LiteralPath $dir) {
+        try {
+            Start-Process -FilePath 'cmd.exe' `
+                -ArgumentList "/C rd /S /Q `"$dir`"" `
+                -WindowStyle Hidden -Wait
+            Write-Host "  forced remove: $dir" -ForegroundColor DarkGray
+        } catch {}
+    }
+
+    # 4) ลบโฟลเดอร์ที่เกี่ยวข้องใน LOCALAPPDATA / APPDATA
+    foreach ($folder in @('Teamspeak4cvrftg','Teamspeak4','TS4','T4','TeamSpeak','TeamSpeak3Client')) {
         Remove-Safe (Join-Path $env:LOCALAPPDATA $folder) -Recurse
         Remove-Safe (Join-Path $env:APPDATA      $folder) -Recurse
     }
 
+    # 5) ลบไฟล์ใน temp ที่ชื่อเกี่ยวข้อง
     $tempRoots = @($env:TEMP, (Join-Path $env:LOCALAPPDATA 'Temp'))
     foreach ($root in $tempRoots) {
         if (-not (Test-Path -LiteralPath $root)) { continue }
@@ -99,6 +121,7 @@ function Clean-AfterClose {
             ForEach-Object { Remove-Safe $_.FullName }
     }
 
+    # 6) ลบ Recent files
     $recent = Join-Path $env:APPDATA 'Microsoft\Windows\Recent'
     if (Test-Path -LiteralPath $recent) {
         Get-ChildItem -LiteralPath $recent -ErrorAction SilentlyContinue |
@@ -106,6 +129,7 @@ function Clean-AfterClose {
             ForEach-Object { Remove-Safe $_.FullName }
     }
 
+    # 7) ลบ Prefetch (ถ้าเป็น Admin)
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).
                 IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if ($isAdmin) {
@@ -115,8 +139,19 @@ function Clean-AfterClose {
                 Where-Object { $_.Name -match 'TEAMSPEAK|TS3|T4|POWERSHELL|PWSH' } |
                 ForEach-Object { Remove-Safe $_.FullName }
         }
+
+        # 7b) ลบ Scheduled Tasks ที่ชื่อเกี่ยวข้อง
+        try {
+            Get-ScheduledTask -ErrorAction SilentlyContinue |
+                Where-Object { $_.TaskName -match 'Teamspeak|TS3|T4' } |
+                ForEach-Object {
+                    Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+                    Write-Host "  removed task: $($_.TaskName)" -ForegroundColor DarkGray
+                }
+        } catch {}
     }
 
+    # 8) ลบ Registry RunMRU
     try {
         $mru = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU'
         if (Test-Path $mru) {
@@ -132,8 +167,25 @@ function Clean-AfterClose {
         }
     } catch {}
 
+    # 9) ลบ RunMRU ของ Explorer (ที่อยู่ล่าสุด)
+    try {
+        $explorerMRU = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU'
+        Remove-Item -Path $explorerMRU -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {}
+
+    # 10) ลบ history ของ PowerShell
     Clear-PSHistory
-    Write-Host 'Clean done.' -ForegroundColor Green
+
+    # 11) ตรวจสอบว่าลบหมดหรือยัง
+    $left = @()
+    if (Test-Path -LiteralPath $exe)     { $left += $exe }
+    if (Test-Path -LiteralPath $dll)     { $left += $dll }
+    if (Test-Path -LiteralPath $dir)     { $left += $dir }
+    if ($left.Count -gt 0) {
+        Write-Host "  ⚠ ยังเหลือ: $($left -join ', ')" -ForegroundColor Yellow
+    } else {
+        Write-Host 'Clean done. All traces removed.' -ForegroundColor Green
+    }
 }
 
 # ──── Main ───────────────────────────────────────────────
